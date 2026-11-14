@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Lint
+        run: ruff check src tests k8s/scale_worker.py k8s/start_load.py
+      - name: Unit tests
+        run: pytest -o addopts= -m "not integration"
+      - name: Pipeline
+        run: make pipeline
+        env:
+          WATERWATCH_SKIP_CHRONOS: "1"
+      - name: Built pages
+        run: pytest -o addopts= tests/test_site_contract.py
+      - name: No drift
+        run: git diff --exit-code
+
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: chronos-bolt-small-v1
+      - name: Install CPU torch and the forecasting package
+        run: |
+          pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt -r requirements-forecast.txt
+          pip install -e .
+      - name: Recompute the likely range and compare the hold-out error
+        run: python -m waterwatch.pipeline
+        env:
+          PYTHONPATH: src
+          WATERWATCH_CHECK_CHRONOS: "1"
+          WATERWATCH_THREADS: "2"
+          HF_HUB_ENABLE_HF_TRANSFER: "0"
+
+  temporal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Temporal dev server
+        run: |
+          curl -fsSL -o temporal.tgz https://github.com/temporalio/cli/releases/download/v1.10.1/temporal_cli_1.10.1_linux_amd64.tar.gz
+          tar -xzf temporal.tgz
+          sudo mv temporal /usr/local/bin/temporal
+          temporal --version
+      - name: Install
+        run: pip install -r requirements-temporal.txt pytest==8.4.2
+      - name: Retry, idempotency, and resume after a worker crash
+        run: pytest -o addopts= -m temporal
+        env:
+          PYTHONPATH: src
+
+  risingwave:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Start RisingWave
+        run: docker run -d --name risingwave -p 4566:4566 -p 5691:5691 risingwavelabs/risingwave:v2.6.3 single_node
+      - name: Wait until it accepts connections
+        run: |
+          for _ in $(seq 1 60); do
+            if python3 - <<'PY'
+          import socket
+          socket.create_connection(("127.0.0.1", 4566), 2).close()
+          PY
+            then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs risingwave
+          exit 1
+      - name: Install
+        run: pip install -r requirements.txt -r requirements-stream.txt
+      - name: Incremental view versus full rebuild
+        run: pytest -o addopts= -m risingwave
+        env:
+          PYTHONPATH: src
+          RUN_RISINGWAVE: "1"
+
+  keda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install kind, helm, and kubectl
+        run: |
+          curl -fsSL -o kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x kind && sudo mv kind /usr/local/bin/kind
+          curl -fsSL -o helm.tgz https://get.helm.sh/helm-v3.17.4-linux-amd64.tar.gz
+          tar -xzf helm.tgz && sudo mv linux-amd64/helm /usr/local/bin/helm
+          curl -fsSL -o kubectl https://dl.k8s.io/release/v1.32.2/bin/linux/amd64/kubectl
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/kubectl
+      - name: Install the worker client
+        run: pip install temporalio==1.36.1
+      - name: Scale the worker with the task-queue backlog
+        run: bash scripts/keda_scale.sh

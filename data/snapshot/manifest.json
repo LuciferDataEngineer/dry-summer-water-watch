@@ -1,0 +1,110 @@
+{
+  "project": "dry-summer-water-watch",
+  "access_timestamp": "2026-11-15T09:27:05+11:00",
+  "access_timezone": "AEDT",
+  "access_display": "15 November 2026, 9:27 AM AEDT",
+  "sites": 306,
+  "tracked_storages": 64,
+  "tracked_with_coordinates": 46,
+  "daily_rows": 113279,
+  "weather_rows": 81834,
+  "history_from": "2022-01-01",
+  "files": [
+    {
+      "path": "data/snapshot/sites.parquet",
+      "description": "Bureau of Meteorology water storage dashboard, latest site table",
+      "source_url": "https://www.bom.gov.au/water/dashboards/rest.php",
+      "licence": "CC BY 4.0",
+      "sha256": "be2561293d075d80a0ff26aac7a808a746df62c3900edc4251653d47068f7360",
+      "bytes": 23725,
+      "rows": 306
+    },
+    {
+      "path": "data/snapshot/daily.parquet",
+      "description": "Bureau of Meteorology water storage dashboard, daily accessible volume",
+      "source_url": "https://www.bom.gov.au/water/dashboards/rest.php",
+      "licence": "CC BY 4.0",
+      "sha256": "50a81da65da213ae0250061106fffaf426ceadc19d11b53c1726e0d9c1064d7c",
+      "bytes": 473505,
+      "rows": 113279
+    },
+    {
+      "path": "data/snapshot/states.parquet",
+      "description": "Bureau of Meteorology water storage dashboard, state totals and change",
+      "source_url": "https://www.bom.gov.au/water/dashboards/rest.php",
+      "licence": "CC BY 4.0",
+      "sha256": "9ba32ede05c2a328af40a41ccc5e6ff35efbe0412222e357b54af70a7eabcf83",
+      "bytes": 3732,
+      "rows": 8
+    },
+    {
+      "path": "data/snapshot/drainage.parquet",
+      "description": "Bureau of Meteorology water storage dashboard, drainage division totals",
+      "source_url": "https://www.bom.gov.au/water/dashboards/rest.php",
+      "licence": "CC BY 4.0",
+      "sha256": "0276d24b29e03f55c8e91c2f35c965032e1afd5a7caef1752435b498f2e6b267",
+      "bytes": 3923,
+      "rows": 13
+    },
+    {
+      "path": "data/snapshot/cities.parquet",
+      "description": "Bureau of Meteorology water storage dashboard, capital-city system cards",
+      "source_url": "https://www.bom.gov.au/water/dashboards/rest.php",
+      "licence": "CC BY 4.0",
+      "sha256": "3940628936f4d87aa04ac757f3da416a70536afbcae0cb5dcc10e1edbea39ea1",
+      "bytes": 2627,
+      "rows": 8
+    },
+    {
+      "path": "data/snapshot/weather.parquet",
+      "description": "Open-Meteo archive daily rain, temperature and FAO reference evapotranspiration",
+      "source_url": "https://archive-api.open-meteo.com/v1/archive",
+      "licence": "CC BY 4.0",
+      "sha256": "6eeb2f6b042d98a71f8289bce12d5e52a80dba0cf2934a2ae490eb1d99cd37f1",
+      "bytes": 385722,
+      "rows": 81834
+    },
+    {
+      "path": "data/snapshot/abs_water_account_2024_25.csv",
+      "description": "ABS Water Account, Australia 2024-25, Table 13 physical supply and use",
+      "source_url": "https://www.abs.gov.au/statistics/environment/environmental-accounts/water-account-australia/2024-25/WAADC13_.csv",
+      "licence": "CC BY 4.0",
+      "sha256": "d2db2d7dc39186bcec73cc12578713d3b2becb9a13d2a28abda8092544b30d22",
+      "bytes": 201186,
+      "rows": 1423
+    },
+    {
+      "path": "data/snapshot/australia_states.geojson",
+      "description": "Natural Earth 1:110m admin-1 states and provinces, Australia only",
+      "source_url": "https://raw.githubusercontent.com/martynafford/natural-earth-geojson/master/50m/cultural/ne_50m_admin_1_states_provinces.json",
+      "licence": "Public domain",
+      "sha256": "b31b8a2c6f3d5b3b0f337505509f720820ba52ef560dbb514d730b458492f48e",
+      "bytes": 92355,
+      "rows": 9
+    },
+    {
+      "path": "data/snapshot/chronos_forecast.parquet",
+      "description": "Chronos-Bolt small likely range for tracked storages, computed from the storage history in this snapshot",
+      "source_url": "https://huggingface.co/amazon/chronos-bolt-small",
+      "licence": "Apache-2.0",
+      "sha256": "4c4250420838bca71cac83971f7c68ab8714b478256978b28c3a405b75b4c326",
+      "bytes": 22390,
+      "rows": 1536
+    },
+    {
+      "path": "data/snapshot/chronos_backtest.parquet",
+      "description": "Hold-out error of the likely-range midpoint against a same-date-last-year path and a last-month pace",
+      "source_url": "https://huggingface.co/amazon/chronos-bolt-small",
+      "licence": "Apache-2.0",
+      "sha256": "454f317dfadd608f423fbd1f2848ff554ad6f2d13b1004fc0bf04563d0cc53f7",
+      "bytes": 2711,
+      "rows": 24
+    }
+  ],
+  "notes": [
+    "Daily history is kept for a tracked subset (large, low, or priority urban and regional storages), not every storage on the dashboard.",
+    "Coordinates come from the Bureau KiWIS station list, matched by name. Unmatched storages are kept in the tables and left off the map.",
+    "Weather dates use Australian Eastern time so they line up with the briefing clock.",
+    "No Murray\u2013Darling Basin Authority file is in this snapshot: the drainage totals from the Bureau dashboard are the basin cross-check."
+  ]
+}

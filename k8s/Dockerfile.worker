@@ -1,0 +1,5 @@
+FROM python:3.12-slim
+WORKDIR /app
+RUN pip install --no-cache-dir temporalio==1.36.1
+COPY k8s/scale_worker.py /app/scale_worker.py
+CMD ["python", "/app/scale_worker.py"]

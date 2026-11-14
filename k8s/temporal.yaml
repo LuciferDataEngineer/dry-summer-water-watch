@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal
+  labels:
+    app: temporal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal
+  template:
+    metadata:
+      labels:
+        app: temporal
+    spec:
+      containers:
+        - name: temporal
+          image: temporalio/admin-tools:1.32.2
+          imagePullPolicy: IfNotPresent
+          command: ["temporal"]
+          args:
+            - server
+            - start-dev
+            - --ip
+            - 0.0.0.0
+            - --port
+            - "7233"
+            - --db-filename
+            - /tmp/temporal.db
+          ports:
+            - name: grpc
+              containerPort: 7233
+          readinessProbe:
+            tcpSocket:
+              port: 7233
+            initialDelaySeconds: 2
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal
+spec:
+  selector:
+    app: temporal
+  ports:
+    - name: grpc
+      port: 7233
+      targetPort: 7233

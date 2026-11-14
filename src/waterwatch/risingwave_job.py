@@ -41,13 +41,8 @@ SELECT
         WHEN a.volume_ml <= 0.40 * a.capacity_ml THEN 0
         WHEN b.volume_ml IS NULL THEN NULL
         WHEN (a.volume_ml - b.volume_ml) / 30.0 >= -1 THEN NULL
-        ELSE ROUND(
-            CAST(
-                (a.volume_ml - 0.40 * a.capacity_ml)
-                / (-(a.volume_ml - b.volume_ml) / 30.0)
-            AS DOUBLE PRECISION),
-            6
-        )
+        ELSE (a.volume_ml - 0.40 * a.capacity_ml)
+             / (-(a.volume_ml - b.volume_ml) / 30.0)
     END AS days_to_low_on_30d_pace
 FROM storage_daily a
 LEFT JOIN storage_daily b
@@ -58,9 +53,9 @@ LEFT JOIN storage_daily c
    AND c.obs_date = a.obs_date - 90
 """
 
-# Days may differ in the last bits of a double. A hundredth of a day is the
-# bound; status bands are compared exactly.
-DAY_TOLERANCE = 0.01
+# Both engines emit the same expression. Results are rounded to 6 decimal
+# days before they are compared, which is about a tenth of a second.
+DAY_DECIMALS = 6
 
 
 def _as_date(value: object) -> date:
@@ -261,6 +256,12 @@ def _wait_until_caught_up(connection, expected_rows: int, holdout: date | None, 
     )
 
 
+def _round_days(value: object) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), DAY_DECIMALS)
+
+
 def _compare(streamed, batched) -> tuple[int, list[str]]:
     def key(row):
         return (row[0], str(row[1])[:10])
@@ -285,13 +286,14 @@ def _compare(streamed, batched) -> tuple[int, list[str]]:
             mismatches += 1
             note(f"{item} status stream={row[3]} batch={other[3]}")
             continue
-        stream_days, batch_days = row[2], other[2]
+        stream_days = _round_days(row[2])
+        batch_days = _round_days(other[2])
         if stream_days is None or batch_days is None:
             if stream_days is not None or batch_days is not None:
                 mismatches += 1
                 note(f"{item} days stream={stream_days} batch={batch_days}")
             continue
-        if abs(float(stream_days) - float(batch_days)) > DAY_TOLERANCE:
+        if stream_days != batch_days:
             mismatches += 1
             note(f"{item} days stream={stream_days} batch={batch_days}")
     return mismatches, samples

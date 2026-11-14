@@ -1,0 +1,26 @@
+[project]
+name = "dry-summer-water-watch"
+version = "1.0.0"
+requires-python = ">=3.12"
+description = "Which Australian water supplies run short first this El Niño summer."
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+markers = [
+  "integration: needs Temporal, RisingWave, or another service",
+  "temporal: Temporal dev server",
+  "risingwave: RisingWave single node",
+]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 160
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+"src/waterwatch/dashboard.py" = ["E501"]

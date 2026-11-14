@@ -1,0 +1,12 @@
+services:
+  temporal:
+    image: temporalio/admin-tools:1.32.2
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--port", "7233", "--db-filename", "/tmp/temporal.db"]
+    ports:
+      - "7233:7233"
+  risingwave:
+    image: risingwavelabs/risingwave:v2.6.3
+    command: ["single_node"]
+    ports:
+      - "4566:4566"
+      - "5691:5691"

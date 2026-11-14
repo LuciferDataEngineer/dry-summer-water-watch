@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-worker
+  labels:
+    app: temporal-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal-worker
+  template:
+    metadata:
+      labels:
+        app: temporal-worker
+    spec:
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: worker
+          image: waterwatch-worker:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: temporal:7233
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: temporal-worker
+spec:
+  scaleTargetRef:
+    name: temporal-worker
+  pollingInterval: 5
+  cooldownPeriod: 10
+  minReplicaCount: 1
+  maxReplicaCount: 3
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Pods
+              value: 3
+              periodSeconds: 15
+        scaleDown:
+          stabilizationWindowSeconds: 10
+          policies:
+            - type: Pods
+              value: 3
+              periodSeconds: 15
+  triggers:
+    - type: temporal
+      metadata:
+        namespace: default
+        taskQueue: water-ingest
+        targetQueueSize: "2"
+        activationTargetQueueSize: "0"
+        endpoint: temporal.default.svc.cluster.local:7233
+        queueTypes: workflow,activity
+        minConnectTimeout: "5"
+        unsafeSsl: "true"

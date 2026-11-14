@@ -91,7 +91,7 @@ a { color: inherit; }
 
 .kpis {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(var(--cols, 5), minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -110,6 +110,9 @@ a { color: inherit; }
 .kpi.watch { border-top-color: var(--watch); }
 .kpi.bad { border-top-color: var(--bad); }
 
+.kpi .label,
+.kpi .detail,
+.kpi .exact { overflow-wrap: anywhere; }
 .kpi .label { color: var(--muted); font-size: 0.86rem; font-weight: 600; }
 .kpi .value {
   font-size: clamp(1.5rem, 2.4vw, 2rem);
@@ -138,8 +141,14 @@ a { color: inherit; }
 
 .layout {
   display: grid;
-  grid-template-columns: 1.4fr 0.8fr;
+  grid-template-columns: 1fr;
   gap: 12px;
+}
+
+.map-panel .chart {
+  width: min(100%, 760px);
+  height: auto;
+  margin: 0 auto;
 }
 
 .means {
@@ -182,7 +191,7 @@ footer.sources {
 footer.sources a { color: var(--blue); }
 
 @media (max-width: 900px) {
-  .kpis { grid-template-columns: 1fr 1fr; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .layout { grid-template-columns: 1fr; }
   .topbar { flex-wrap: wrap; }
 }

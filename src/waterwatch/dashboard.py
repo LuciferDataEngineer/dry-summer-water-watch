@@ -4,8 +4,21 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import shutil
 from pathlib import Path
+
+from waterwatch.briefing import (
+    gap_states,
+    lever_kpis,
+    lever_title,
+    scenario_kpis,
+    scenario_takeaway,
+    scenario_title,
+    tight_kpis,
+    tight_story,
+    under_line_exact,
+)
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 
@@ -93,7 +106,7 @@ def _shell(active: str, body: str, briefing: dict) -> str:
 """
 
 
-def _kpis(cards: list[dict]) -> str:
+def _kpis(cards: list[dict], section_id: str = "") -> str:
     blocks = []
     for card in cards:
         blocks.append(
@@ -104,7 +117,14 @@ def _kpis(cards: list[dict]) -> str:
               <p class="exact">Exact values: {esc(card['exact'])}</p>
             </article>"""
         )
-    return f'<section class="kpis">{"".join(blocks)}</section>'
+    cols = min(max(len(cards), 1), 5)
+    ident = f' id="{esc(section_id)}"' if section_id else ""
+    return f'<section class="kpis"{ident} style="--cols: {cols}">{"".join(blocks)}</section>'
+
+
+def _text_width(text: str, font_size: float) -> float:
+    """Conservative width in SVG user units so labels are not clipped or overlapping bars."""
+    return len(text) * font_size * 0.62
 
 
 def _project(lon: float, lat: float, width: float, height: float) -> tuple[float, float]:
@@ -181,41 +201,51 @@ def _map_svg(briefing: dict, root: Path) -> str:
 
 
 def _state_chart(states: list[dict]) -> str:
-    rows = [row for row in states if row.get("percent_full") is not None and row.get("capacity_ml")]
-    rows = [row for row in rows if (row.get("capacity_ml") or 0) > 0]
+    rows = [row for row in states if row.get("percent_full") is not None and (row.get("capacity_ml") or 0) > 0]
     rows.sort(key=lambda row: row["percent_full"])
     if not rows:
         return ""
-    width = 760
-    row_h = 36
-    left = 210
-    height = 28 + row_h * len(rows)
-    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="How full each state is">']
-    max_x = width - 80
+    label_font, value_font = 14, 13
+    width, row_h = 760, 40
+    label_w = max(_text_width(str(row["name"]), label_font) for row in rows)
+    left = 12 + label_w + 18
+    max_x = width - 72
+    height = 16 + row_h * len(rows)
+    parts = [
+        f'<svg class="chart state-chart" viewBox="0 0 {width} {height}" role="img" aria-label="How full each state is">'
+    ]
     for index, row in enumerate(rows):
-        y = 16 + index * row_h
+        y = 8 + index * row_h
         percent = float(row["percent_full"])
         bar = left + (max_x - left) * max(0.0, min(percent, 100)) / 100
         colour = "#ff5c7a" if percent < 40 else "#ffc14d" if percent < 60 else "#2ee6a6"
-        parts.append(f'<text x="8" y="{y + 16}" font-size="14">{esc(row["name"])}</text>')
-        parts.append(f'<rect x="{left}" y="{y + 4}" width="{max(bar - left, 0):.1f}" height="16" rx="4" fill="{colour}"/>')
-        parts.append(f'<text x="{bar + 8:.1f}" y="{y + 16}" font-size="13">{percent:.1f}%</text>')
+        parts.append(f'<text x="8" y="{y + 20}" font-size="{label_font}">{esc(row["name"])}</text>')
+        parts.append(
+            f'<rect x="{left}" y="{y + 8}" width="{max(bar - left, 0):.1f}" height="16" rx="4" fill="{colour}"/>'
+        )
+        parts.append(f'<text x="{bar + 10:.1f}" y="{y + 20}" font-size="{value_font}">{percent:.1f}%</text>')
     parts.append("</svg>")
     return "".join(parts)
 
 
+def _tight_rows(storages: list[dict]) -> list[dict]:
+    return [storage for storage in storages if storage.get("role") != "hydro"]
+
+
 def _tight_chart(storages: list[dict]) -> str:
-    rows = storages[:12]
+    rows = _tight_rows(storages)[:12]
     if not rows:
         return ""
-    width = 760
-    row_h = 34
-    left = 168
-    height = 20 + row_h * len(rows)
+    label_font, value_font = 13, 13
+    width, row_h = 760, 36
+    label_w = max(_text_width(storage["place"], label_font) for storage in rows)
+    left = 12 + label_w + 16
+    height = 16 + row_h * len(rows)
     parts = [
-        f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="Days until the 40 percent line on a dry summer">'
+        f'<svg class="chart tight-chart" viewBox="0 0 {width} {height}" role="img" '
+        f'aria-label="Days until the 40 percent line on a dry summer">'
     ]
-    span = width - left - 90
+    span = width - left - 120
     for index, storage in enumerate(rows):
         y = 8 + index * row_h
         days = storage.get("days_dry")
@@ -227,43 +257,121 @@ def _tight_chart(storages: list[dict]) -> str:
             label = _days(days)
         colour = _status_colour(storage.get("status") or "")
         bar = left + span * fraction
-        parts.append(f'<text x="8" y="{y + 16}" font-size="13">{esc(storage["place"][:22])}</text>')
+        parts.append(f'<text x="8" y="{y + 18}" font-size="{label_font}">{esc(storage["place"])}</text>')
         parts.append(
-            f'<rect x="{left}" y="{y + 4}" width="{max(bar - left, 2):.1f}" height="16" rx="4" fill="{colour}">'
+            f'<rect x="{left}" y="{y + 6}" width="{max(bar - left, 2):.1f}" height="16" rx="4" fill="{colour}">'
             f"<title>{esc(storage['place'])} {label}</title></rect>"
         )
-        parts.append(f'<text x="{bar + 8:.1f}" y="{y + 16}" font-size="13">{esc(label)}</text>')
+        parts.append(f'<text x="{bar + 10:.1f}" y="{y + 18}" font-size="{value_font}">{esc(label)}</text>')
     parts.append("</svg>")
     return "".join(parts)
 
 
+def displayed_percents(storage: dict, path: dict) -> list[float]:
+    capacity = storage.get("capacity_ml") or 1
+    values: list[float] = []
+    for key in ("history", "dry", "typical", "wet"):
+        for row in path.get(key) or []:
+            values.append(max(row["volume_ml"], 0) / capacity * 100)
+    for row in path.get("band") or []:
+        values.append(max(row.get("p10_ml") or 0, 0) / capacity * 100)
+        values.append(max(row.get("p90_ml") or 0, 0) / capacity * 100)
+    return values
+
+
+def percent_axis(values: list[float]) -> tuple[float, float]:
+    """Fit the axis to the paths. A near-empty supply is not drawn on a 0–100 scale."""
+    if not values:
+        return 0.0, 8.0
+    data_max = max(values)
+    data_min = min(values)
+    span = max(data_max - data_min, 1.0)
+    pad = max(1.0, span * 0.18)
+    low = 0.0 if data_min >= -0.05 else data_min - pad
+    high = data_max + pad
+    if data_max >= 80:
+        high = max(high, 100.0)
+    elif data_max + 12 >= 40:
+        high = max(high, 46.0)
+    if high - low < 8:
+        high = low + 8
+    return low, high
+
+
+def axis_ticks(low: float, high: float) -> list[float]:
+    span = high - low
+    step = 25.0
+    for candidate in (1, 2, 5, 10, 20, 25):
+        if span / candidate <= 6:
+            step = float(candidate)
+            break
+    value = math.ceil((low - 1e-9) / step) * step
+    ticks: list[float] = []
+    while value <= high + 1e-6:
+        ticks.append(float(value))
+        value += step
+    return ticks
+
+
+def scale_note(high: float) -> str:
+    if high < 40:
+        return "The scale is zoomed to these paths, which sit near empty. The 40% line is above this chart."
+    return "The dashed line is 40% of accessible capacity."
+
+
+def _series_label(name: str, percent: float, span: float) -> str:
+    if percent < 0.05:
+        shown = "0%"
+    elif span < 30:
+        shown = f"{percent:.1f}%"
+    else:
+        shown = f"{percent:.0f}%"
+    return f"{name} {shown}"
+
+
+def _spread_ys(ys: list[float], gap: float, min_y: float, max_y: float) -> list[float]:
+    if not ys:
+        return []
+    order = sorted(range(len(ys)), key=lambda index: ys[index])
+    placed = [ys[index] for index in order]
+    for index in range(1, len(placed)):
+        placed[index] = max(placed[index], placed[index - 1] + gap)
+    if placed[-1] > max_y:
+        shift = placed[-1] - max_y
+        placed = [item - shift for item in placed]
+    if placed[0] < min_y:
+        if len(placed) == 1:
+            placed = [min(max(placed[0], min_y), max_y)]
+        else:
+            step = (max_y - min_y) / (len(placed) - 1)
+            placed = [min_y + step * index for index in range(len(placed))]
+    result = [0.0] * len(ys)
+    for position, index in enumerate(order):
+        result[index] = placed[position]
+    return result
+
+
 def _line_chart(storage: dict, path: dict) -> str:
     capacity = storage.get("capacity_ml") or 1
-    series = {
-        "History": (path.get("history") or [], "#d6e4f0", False),
-        "Dry summer": (path.get("dry") or [], "#ff5c7a", False),
-        "Typical summer": (path.get("typical") or [], "#ffc14d", False),
-        "Wet summer": (path.get("wet") or [], "#2ee6a6", False),
-    }
+    series = (
+        ("History", path.get("history") or [], "#d6e4f0"),
+        ("Dry summer", path.get("dry") or [], "#ff5c7a"),
+        ("Typical summer", path.get("typical") or [], "#ffc14d"),
+        ("Wet summer", path.get("wet") or [], "#2ee6a6"),
+    )
     band = path.get("band") or []
-    points: list[tuple[str, float]] = []
-    for rows, _colour, _flag in series.values():
-        for row in rows:
-            points.append((row["date"], row["volume_ml"] / capacity * 100))
-    for row in band:
-        points.append((row["date"], row["p10_ml"] / capacity * 100))
-        points.append((row["date"], row["p90_ml"] / capacity * 100))
-    if len(points) < 2:
+    values = displayed_percents(storage, path)
+    if len(values) < 2:
         return "<p>Not enough daily readings to draw this path.</p>"
-    dates = sorted({item[0] for item in points})
+    dates = sorted(
+        {row["date"] for _name, rows, _colour in series for row in rows}
+        | {row["date"] for row in band}
+    )
     index = {day: position for position, day in enumerate(dates)}
-    values = [item[1] for item in points]
-    low = min(0, min(values))
-    high = max(100, max(values))
-    if high == low:
-        high = low + 1
-    width, height = 760, 420
-    left, right, top, bottom = 48, 128, 28, 36
+    low, high = percent_axis(values)
+    span = high - low
+    width, height = 760, 440
+    left, right, top, bottom = 56, 188, 28, 42
 
     def xy(day: str, percent: float) -> tuple[float, float]:
         x = left + (index[day] / max(len(dates) - 1, 1)) * (width - left - right)
@@ -271,16 +379,21 @@ def _line_chart(storage: dict, path: dict) -> str:
         return x, y
 
     parts = [
-        f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="Summer paths for {esc(storage["place"])}">'
+        f'<svg class="chart scenario-chart" viewBox="0 0 {width} {height}" role="img" '
+        f'aria-label="Summer paths for {esc(storage["place"])}">'
     ]
-    # 40% line
-    y40 = xy(dates[0], 40)[1]
-    parts.append(f'<line x1="{left}" y1="{y40:.1f}" x2="{width - right}" y2="{y40:.1f}" stroke="#ff5c7a" stroke-dasharray="4 4"/>')
-    parts.append(f'<text x="{left}" y="{y40 - 4:.1f}" font-size="12" fill="#ff5c7a">40% line</text>')
-    for tick in (0, 50, 100):
-        if low <= tick <= high:
-            y = xy(dates[0], tick)[1]
-            parts.append(f'<text x="6" y="{y + 4:.1f}" font-size="12" class="muted-text">{tick:.0f}%</text>')
+    plot_bottom = height - bottom
+    if low <= 40 <= high:
+        y40 = xy(dates[0], 40)[1]
+        parts.append(
+            f'<line x1="{left}" y1="{y40:.1f}" x2="{width - right}" y2="{y40:.1f}" stroke="#ff5c7a" stroke-dasharray="4 4"/>'
+        )
+        parts.append(f'<text x="{left}" y="{y40 - 14:.1f}" font-size="13" fill="#ff5c7a">40% line</text>')
+    for tick in axis_ticks(low, high):
+        y = xy(dates[0], tick)[1]
+        if low <= 40 <= high and abs(y - xy(dates[0], 40)[1]) < 16:
+            continue
+        parts.append(f'<text x="8" y="{y + 4:.1f}" font-size="13" class="muted-text">{tick:.0f}%</text>')
     if band:
         polygon = []
         for row in band:
@@ -289,8 +402,9 @@ def _line_chart(storage: dict, path: dict) -> str:
             polygon.append(xy(row["date"], max(row["p90_ml"], 0) / capacity * 100))
         poly = " ".join(f"{x:.1f},{y:.1f}" for x, y in polygon)
         parts.append(f'<polygon points="{poly}" fill="#7ec8ff" fill-opacity="0.28" stroke="#7ec8ff" stroke-width="1"/>')
-    end_labels = []
-    for name, (rows, colour, _flag) in series.items():
+    history_label = None
+    gutter: list[tuple[float, str, str]] = []
+    for name, rows, colour in series:
         if len(rows) < 2:
             continue
         commands = []
@@ -301,19 +415,30 @@ def _line_chart(storage: dict, path: dict) -> str:
             commands.append(f"{'M' if not commands else 'L'}{x:.1f},{y:.1f}")
             last = (x, y, percent)
         parts.append(f'<path d="{" ".join(commands)}" fill="none" stroke="{colour}" stroke-width="2.4"/>')
-        if last:
-            end_labels.append((last[0], last[1], f"{name} {last[2]:.0f}%", colour))
-    end_labels.sort(key=lambda item: item[1])
-    last_y = -999
-    for x, y, text, colour in end_labels:
-        y = max(y, last_y + 16)
-        last_y = y
-        parts.append(f'<text x="{x + 6:.1f}" y="{y + 4:.1f}" font-size="12" fill="{colour}">{esc(text)}</text>')
-    if dates:
-        parts.append(f'<text x="{left}" y="{height - 10}" font-size="12" class="muted-text">{esc(dates[0])}</text>')
+        if last is None:
+            continue
+        text = _series_label(name, last[2], span)
+        if name == "History":
+            history_label = (last[0], last[1], text, colour)
+        else:
+            gutter.append((last[1], text, colour))
+    if history_label is not None:
+        hx, hy, text, colour = history_label
+        label_y = hy - 24
+        if label_y < top + 14:
+            label_y = min(hy + 24, plot_bottom - 6)
+        label_x = max(hx - 8, left + _text_width(text, 13) + 4)
         parts.append(
-            f'<text x="{width - right - 70}" y="{height - 10}" font-size="12" class="muted-text">{esc(dates[-1])}</text>'
+            f'<text x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="end" font-size="13" fill="{colour}">{esc(text)}</text>'
         )
+    spread = _spread_ys([item[0] for item in gutter], 22, top + 14, plot_bottom - 6)
+    gutter_x = width - right + 12
+    for ( _y, text, colour), y in zip(gutter, spread, strict=False):
+        parts.append(f'<text x="{gutter_x:.1f}" y="{y:.1f}" font-size="13" fill="{colour}">{esc(text)}</text>')
+    if dates:
+        parts.append(f'<text x="{left}" y="{height - 16}" font-size="13" class="muted-text">{esc(dates[0])}</text>')
+        end_x = max(left + 80, width - right - _text_width(dates[-1], 13) - 8)
+        parts.append(f'<text x="{end_x:.1f}" y="{height - 16}" font-size="13" class="muted-text">{esc(dates[-1])}</text>')
     parts.append("</svg>")
     parts.append(
         '<div class="legend">'
@@ -327,21 +452,30 @@ def _line_chart(storage: dict, path: dict) -> str:
     return "".join(parts)
 
 
+def _chart_geography(name: str) -> str:
+    if name == "Australian Capital Territory":
+        return "ACT"
+    return name
+
+
 def _lever_chart(levers: list[dict]) -> str:
-    rows = [row for row in levers if row["geography"] != "Australia"]
-    rows = [row for row in rows if any((row.get(key) or 0) > 0 for key in ("urban_gap_ml", "restriction_ml", "desal_ml", "reuse_ml"))]
+    rows = gap_states(levers)
     if not rows:
-        return "<p>No state gap to draw.</p>"
+        return "<p>No state has a town-supply gap to draw. The table below still lists every state.</p>"
+    label_font, value_font = 14, 13
+    labels = [_chart_geography(row["geography"]) for row in rows]
     width = 760
-    left = 150
-    group_h = 78
-    height = 36 + group_h * len(rows)
+    left = 12 + max(_text_width(label, label_font) for label in labels) + 20
+    slot_h = 22
+    group_h = 16 + slot_h * 4
+    height = 24 + group_h * len(rows)
     biggest = 1.0
     for row in rows:
         for key in ("urban_gap_ml", "restriction_ml", "desal_ml", "reuse_ml"):
             biggest = max(biggest, row.get(key) or 0)
     parts = [
-        f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="Town-supply gap against three what-if responses">'
+        f'<svg class="chart lever-chart" viewBox="0 0 {width} {height}" role="img" '
+        f'aria-label="Town-supply gap against three what-if responses">'
     ]
     colours = (
         ("urban_gap_ml", "#ff5c7a", "Gap"),
@@ -349,16 +483,24 @@ def _lever_chart(levers: list[dict]) -> str:
         ("desal_ml", "#7ec8ff", "Desalination at last year’s pace"),
         ("reuse_ml", "#2ee6a6", "Recycled water at last year’s pace"),
     )
-    span = width - left - 90
+    span = width - left - 84
     for index, row in enumerate(rows):
-        top = 20 + index * group_h
-        parts.append(f'<text x="8" y="{top + 28}" font-size="14">{esc(row["geography"])}</text>')
+        top = 12 + index * group_h
+        parts.append(
+            f'<text x="8" y="{top + group_h / 2:.0f}" font-size="{label_font}">{esc(labels[index])}</text>'
+        )
         for slot, (key, colour, _label) in enumerate(colours):
             value = row.get(key) or 0
-            y = top + slot * 16
+            if value <= 0:
+                continue
+            y = top + 6 + slot * slot_h
             bar = left + span * (value / biggest)
-            parts.append(f'<rect x="{left}" y="{y}" width="{max(bar - left, 0):.1f}" height="12" rx="3" fill="{colour}"/>')
-            parts.append(f'<text x="{bar + 6:.1f}" y="{y + 11}" font-size="11">{value / 1000:,.0f} GL</text>')
+            parts.append(
+                f'<rect x="{left}" y="{y}" width="{max(bar - left, 2):.1f}" height="14" rx="3" fill="{colour}"/>'
+            )
+            parts.append(
+                f'<text x="{bar + 8:.1f}" y="{y + 12}" font-size="{value_font}">{value / 1000:,.0f} GL</text>'
+            )
     parts.append("</svg>")
     legend = "".join(
         f'<span><i class="swatch" style="background:{colour}"></i>{esc(label)}</span>' for _key, colour, label in colours
@@ -371,12 +513,14 @@ def _means(title: str, text: str) -> str:
     return f'<aside class="means"><strong>What this means</strong>{esc(text)}</aside>'
 
 
-def _banner(briefing: dict) -> str:
+def _banner(briefing: dict, title: str | None = None, lede: str | None = None) -> str:
+    heading = briefing["headline"] if title is None else title
+    standfirst = briefing["lede"] if lede is None else lede
     return (
         '<section class="banner">'
         f'<p class="eyebrow">Australia · summer 2026–27 · as at {esc(briefing["as_of_display"])}</p>'
-        f'<h1>{esc(briefing["headline"])}</h1>'
-        f'<p class="lede">{esc(briefing["lede"])}</p>'
+        f'<h1>{esc(heading)}</h1>'
+        f'<p class="lede">{esc(standfirst)}</p>'
         "</section>"
     )
 
@@ -394,7 +538,7 @@ def _outlook(briefing: dict, root: Path) -> str:
     body = (
         _banner(briefing)
         + _kpis(briefing["kpis"])
-        + '<section class="layout"><div class="panel"><h2>Where the tracked supplies stand</h2>'
+        + '<section class="layout"><div class="panel map-panel"><h2>Where the tracked supplies stand</h2>'
         + _map_svg(briefing, root)
         + '</div><div class="panel"><h2>Whole-of-state storages</h2>'
         + _state_chart(briefing["states"])
@@ -460,19 +604,22 @@ def _tight(briefing: dict) -> str:
       const days = value => value === null || value === undefined ? 'Holds' : (value <= 0 ? 'Under the line' : Math.round(value) + ' days');
       const pct = value => value === null || value === undefined ? '–' : value.toFixed(1) + '%';
       body.innerHTML = rows.map(row => '<tr><td>' + row.place + '</td><td>' + row.state + '</td><td>' + (kind[row.role] || 'Regional supply') + '</td><td class="num">' + pct(row.percent_full) + '</td><td class="num">' + days(row.days_dry) + '</td><td class="num">' + days(row.days_recent) + '</td></tr>').join('');
-      const chartRows = rows.slice(0, 12);
-      const width = 760, rowH = 34, left = 168, height = 20 + rowH * Math.max(chartRows.length, 1);
-      const span = width - left - 90;
-      let svg = '<svg class="chart" viewBox="0 0 ' + width + ' ' + height + '" role="img">';
+      const chartRows = rows.filter(row => row.role !== 'hydro').slice(0, 12);
+      const width = 760, rowH = 36, font = 13;
+      const longest = chartRows.reduce((size, row) => Math.max(size, row.place.length), 8);
+      const left = 12 + longest * font * 0.62 + 16;
+      const height = 16 + rowH * Math.max(chartRows.length, 1);
+      const span = width - left - 120;
+      let svg = '<svg class="chart tight-chart" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Days until the 40 percent line on a dry summer">';
       chartRows.forEach((row, index) => {{
         const y = 8 + index * rowH;
         const fraction = row.days_dry === null || row.days_dry === undefined ? 1 : Math.max(0, Math.min(row.days_dry, 140)) / 140;
         const colour = row.status === 'comfortable' ? '#2ee6a6' : (row.status === 'watch' ? '#ffc14d' : '#ff5c7a');
         const bar = left + span * fraction;
         const label = days(row.days_dry);
-        svg += '<text x="8" y="' + (y + 16) + '" font-size="13">' + row.place.slice(0, 22) + '</text>';
-        svg += '<rect x="' + left + '" y="' + (y + 4) + '" width="' + Math.max(bar - left, 2) + '" height="16" rx="4" fill="' + colour + '"></rect>';
-        svg += '<text x="' + (bar + 8) + '" y="' + (y + 16) + '" font-size="13">' + label + '</text>';
+        svg += '<text x="8" y="' + (y + 18) + '" font-size="13">' + row.place + '</text>';
+        svg += '<rect x="' + left + '" y="' + (y + 6) + '" width="' + Math.max(bar - left, 2) + '" height="16" rx="4" fill="' + colour + '"></rect>';
+        svg += '<text x="' + (bar + 10) + '" y="' + (y + 18) + '" font-size="13">' + label + '</text>';
       }});
       svg += '</svg>';
       document.getElementById('tight-chart').innerHTML = svg;
@@ -484,13 +631,18 @@ def _tight(briefing: dict) -> str:
     }}));
     </script>
     """
+    title, lede = tight_story(briefing["storages"])
     body = (
-        _banner(briefing)
+        _banner(briefing, title, lede)
+        + _kpis(tight_kpis(briefing["storages"]))
         + '<section class="panel"><h2>Days above the 40% line if the driest recent summer repeats</h2>'
         + f'<div class="pills" role="group" aria-label="Filter by state">{pills}</div>'
         + f'<div id="tight-chart">{_tight_chart(briefing["storages"])}</div>'
-        + '<p class="exact">Exact values: “Holds” means the storage is not falling toward 40% on that path. '
-        + "A bar at the right edge is 140 days, which is past the end of March. The list below is every supply followed day by day.</p>"
+        + '<p class="exact">Exact values: '
+        + esc(under_line_exact(briefing["storages"]))
+        + " “Holds” means the storage is not falling toward 40% on that path. "
+        + "A bar at the right edge is 140 days, which is past the end of March. "
+        + "The chart uses this same count. Power-station lakes stay in the table below, which lists every supply followed day by day.</p>"
         + _table(briefing["storages"])
         + "</section>"
         + _means("What this means", briefing["means"]["tight"])
@@ -513,14 +665,19 @@ def _scenarios(briefing: dict) -> str:
         chart = _line_chart(featured, briefing["paths"].get(featured["storage_id"], {}))
     payload = {}
     for storage in choices:
+        path = briefing["paths"].get(storage["storage_id"], {})
+        _low, high = percent_axis(displayed_percents(storage, path))
         payload[storage["storage_id"]] = {
             "place": storage["place"],
             "capacity_ml": storage.get("capacity_ml"),
-            "path": briefing["paths"].get(storage["storage_id"], {}),
+            "path": path,
             "percent_full": storage.get("percent_full"),
             "end_percent_dry": storage.get("end_percent_dry"),
             "end_percent_typical": storage.get("end_percent_typical"),
             "end_percent_wet": storage.get("end_percent_wet"),
+            "cards": scenario_kpis(storage),
+            "means": scenario_takeaway(storage),
+            "scale_note": scale_note(high),
         }
     script = """
     <script id="scenario-data" type="application/json">PAYLOAD</script>
@@ -532,20 +689,27 @@ def _scenarios(briefing: dict) -> str:
       const pack = packs[pill.dataset.id];
       document.getElementById('scenario-title').textContent = pack.place;
       document.getElementById('scenario-chart').innerHTML = window.renderScenario(pack);
-      const end = pack.end_percent_dry;
-      const text = 'By the end of March, ' + pack.place + ' would be about ' +
-        (end == null ? 'unchanged' : end.toFixed(1) + '%') + ' full on its driest recent summer, ' +
-        (pack.end_percent_typical == null ? '–' : pack.end_percent_typical.toFixed(1) + '%') + ' on a middle summer, and ' +
-        (pack.end_percent_wet == null ? '–' : pack.end_percent_wet.toFixed(1) + '%') + ' on its wettest recent summer.';
-      document.getElementById('scenario-means').textContent = text;
+      document.getElementById('scenario-means').textContent = pack.means;
+      const scale = document.getElementById('scenario-scale');
+      if (scale) scale.textContent = pack.scale_note;
+      const cards = document.querySelectorAll('#scenario-kpis .kpi');
+      (pack.cards || []).forEach((card, index) => {
+        const node = cards[index];
+        if (!node) return;
+        node.className = 'kpi ' + card.tone;
+        node.querySelector('.label').textContent = card.label;
+        node.querySelector('.value').textContent = card.value;
+        node.querySelector('.detail').textContent = card.detail;
+        node.querySelector('.exact').textContent = 'Exact values: ' + card.exact;
+      });
     }));
     window.renderScenario = function(pack) {
       const capacity = pack.capacity_ml || 1;
       const series = [
-        ['Recent readings', (pack.path.history || []), '#d6e4f0'],
-        ['Dry summer', (pack.path.dry || []), '#ff5c7a'],
-        ['Typical summer', (pack.path.typical || []), '#ffc14d'],
-        ['Wet summer', (pack.path.wet || []), '#2ee6a6']
+        ['History', (pack.path.history || []), '#d6e4f0', true],
+        ['Dry summer', (pack.path.dry || []), '#ff5c7a', false],
+        ['Typical summer', (pack.path.typical || []), '#ffc14d', false],
+        ['Wet summer', (pack.path.wet || []), '#2ee6a6', false]
       ];
       const band = pack.path.band || [];
       const dates = [];
@@ -556,59 +720,128 @@ def _scenarios(briefing: dict) -> str:
       if (dates.length < 2) return '<p>Not enough daily readings to draw this path.</p>';
       const values = [];
       series.forEach(item => item[1].forEach(row => values.push(Math.max(row.volume_ml, 0) / capacity * 100)));
-      band.forEach(row => { values.push(row.p10_ml / capacity * 100); values.push(row.p90_ml / capacity * 100); });
-      const low = Math.min(0, ...values), high = Math.max(100, ...values);
-      const width = 760, height = 420, left = 48, right = 128, top = 28, bottom = 36;
+      band.forEach(row => {
+        values.push(Math.max(row.p10_ml || 0, 0) / capacity * 100);
+        values.push(Math.max(row.p90_ml || 0, 0) / capacity * 100);
+      });
+      const dataMax = Math.max.apply(null, values);
+      const dataMin = Math.min.apply(null, values);
+      const dataSpan = Math.max(dataMax - dataMin, 1);
+      const pad = Math.max(1, dataSpan * 0.18);
+      let low = dataMin >= -0.05 ? 0 : dataMin - pad;
+      let high = dataMax + pad;
+      if (dataMax >= 80) high = Math.max(high, 100);
+      else if (dataMax + 12 >= 40) high = Math.max(high, 46);
+      if (high - low < 8) high = low + 8;
+      const span = high - low;
+      const width = 760, height = 440, left = 56, right = 188, top = 28, bottom = 42;
       const index = {};
-      dates.forEach((day, position) => index[day] = position);
+      dates.forEach((day, position) => { index[day] = position; });
       const xy = (day, percent) => {
         const x = left + (index[day] / (dates.length - 1)) * (width - left - right);
-        const y = top + (high - percent) / (high - low) * (height - top - bottom);
+        const y = top + (high - percent) / span * (height - top - bottom);
         return [x, y];
       };
-      let svg = '<svg class="chart" viewBox="0 0 ' + width + ' ' + height + '" role="img">';
+      const plotBottom = height - bottom;
+      let svg = '<svg class="chart scenario-chart" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Summer paths">';
+      const showLine = low <= 40 && 40 <= high;
       const y40 = xy(dates[0], 40)[1];
-      svg += '<line x1="' + left + '" y1="' + y40 + '" x2="' + (width - right) + '" y2="' + y40 + '" stroke="#ff5c7a" stroke-dasharray="4 4"/>';
-      svg += '<text x="' + left + '" y="' + (y40 - 4) + '" font-size="12" fill="#ff5c7a">40% line</text>';
+      if (showLine) {
+        svg += '<line x1="' + left + '" y1="' + y40 + '" x2="' + (width - right) + '" y2="' + y40 + '" stroke="#ff5c7a" stroke-dasharray="4 4"/>';
+        svg += '<text x="' + left + '" y="' + (y40 - 14) + '" font-size="13" fill="#ff5c7a">40% line</text>';
+      }
+      let step = 25;
+      const steps = [1, 2, 5, 10, 20, 25];
+      for (let s = 0; s < steps.length; s++) {
+        if (span / steps[s] <= 6) { step = steps[s]; break; }
+      }
+      for (let tick = Math.ceil((low - 1e-9) / step) * step; tick <= high + 1e-6; tick += step) {
+        const y = xy(dates[0], tick)[1];
+        if (showLine && Math.abs(y - y40) < 16) continue;
+        svg += '<text x="8" y="' + (y + 4) + '" font-size="13" class="muted-text">' + Math.round(tick) + '%</text>';
+      }
       if (band.length) {
         const poly = [];
-        band.forEach(row => poly.push(xy(row.date, Math.max(row.p10_ml, 0) / capacity * 100)));
-        band.slice().reverse().forEach(row => poly.push(xy(row.date, Math.max(row.p90_ml, 0) / capacity * 100)));
-        svg += '<polygon points="' + poly.map(pair => pair[0].toFixed(1) + ',' + pair[1].toFixed(1)).join(' ') + '" fill="#7ec8ff" fill-opacity="0.28" stroke="#7ec8ff"/>';
+        band.forEach(row => poly.push(xy(row.date, Math.max(row.p10_ml || 0, 0) / capacity * 100)));
+        band.slice().reverse().forEach(row => poly.push(xy(row.date, Math.max(row.p90_ml || 0, 0) / capacity * 100)));
+        svg += '<polygon points="' + poly.map(pair => pair[0].toFixed(1) + ',' + pair[1].toFixed(1)).join(' ') + '" fill="#7ec8ff" fill-opacity="0.28" stroke="#7ec8ff" stroke-width="1"/>';
       }
-      const labels = [];
+      function seriesLabel(name, percent) {
+        const shown = percent < 0.05 ? '0%' : (span < 30 ? percent.toFixed(1) + '%' : Math.round(percent) + '%');
+        return name + ' ' + shown;
+      }
+      let history = null;
+      const gutter = [];
       series.forEach(item => {
         if (item[1].length < 2) return;
         let d = '';
         let last = null;
         item[1].forEach(row => {
-          const pair = xy(row.date, Math.max(row.volume_ml, 0) / capacity * 100);
+          const percent = Math.max(row.volume_ml, 0) / capacity * 100;
+          const pair = xy(row.date, percent);
           d += (d ? 'L' : 'M') + pair[0].toFixed(1) + ',' + pair[1].toFixed(1);
-          last = [pair[0], pair[1], Math.max(row.volume_ml, 0) / capacity * 100];
+          last = [pair[0], pair[1], percent];
         });
         svg += '<path d="' + d + '" fill="none" stroke="' + item[2] + '" stroke-width="2.4"/>';
-        if (last) labels.push([last[0], last[1], item[0] + ' ' + last[2].toFixed(0) + '%', item[2]]);
+        if (!last) return;
+        const text = seriesLabel(item[0], last[2]);
+        if (item[3]) history = [last[0], last[1], text, item[2]];
+        else gutter.push([last[1], text, item[2]]);
       });
-      labels.sort((a, b) => a[1] - b[1]);
-      let lastY = -999;
-      labels.forEach(label => {
-        const y = Math.max(label[1], lastY + 16);
-        lastY = y;
-        svg += '<text x="' + (label[0] + 6) + '" y="' + (y + 4) + '" font-size="12" fill="' + label[3] + '">' + label[2] + '</text>';
+      if (history) {
+        let labelY = history[1] - 24;
+        if (labelY < top + 14) labelY = Math.min(history[1] + 24, plotBottom - 6);
+        const textW = history[2].length * 13 * 0.62;
+        const labelX = Math.max(history[0] - 8, left + textW + 4);
+        svg += '<text x="' + labelX + '" y="' + labelY + '" text-anchor="end" font-size="13" fill="' + history[3] + '">' + history[2] + '</text>';
+      }
+      const order = gutter.map((_item, i) => i).sort((a, b) => gutter[a][0] - gutter[b][0]);
+      const placed = order.map(i => gutter[i][0]);
+      for (let i = 1; i < placed.length; i++) placed[i] = Math.max(placed[i], placed[i - 1] + 22);
+      const maxY = plotBottom - 6, minY = top + 14;
+      if (placed.length && placed[placed.length - 1] > maxY) {
+        const shift = placed[placed.length - 1] - maxY;
+        for (let i = 0; i < placed.length; i++) placed[i] -= shift;
+      }
+      if (placed.length && placed[0] < minY) {
+        if (placed.length === 1) placed[0] = Math.min(Math.max(placed[0], minY), maxY);
+        else {
+          const stepY = (maxY - minY) / (placed.length - 1);
+          for (let i = 0; i < placed.length; i++) placed[i] = minY + stepY * i;
+        }
+      }
+      const ys = new Array(gutter.length);
+      order.forEach((source, position) => { ys[source] = placed[position]; });
+      const gutterX = width - right + 12;
+      gutter.forEach((item, i) => {
+        svg += '<text x="' + gutterX + '" y="' + ys[i] + '" font-size="13" fill="' + item[2] + '">' + item[1] + '</text>';
       });
+      svg += '<text x="' + left + '" y="' + (height - 16) + '" font-size="13" class="muted-text">' + dates[0] + '</text>';
+      const endLabel = dates[dates.length - 1];
+      const endX = Math.max(left + 80, width - right - endLabel.length * 13 * 0.62 - 8);
+      svg += '<text x="' + endX + '" y="' + (height - 16) + '" font-size="13" class="muted-text">' + endLabel + '</text>';
       svg += '</svg>';
       return svg;
     };
     </script>
     """.replace("PAYLOAD", json.dumps(payload).replace("<", "\\u003c"))
-    title = featured["place"] if featured else "Summer paths"
+    heading = scenario_title(featured)
+    lede = scenario_takeaway(featured)
+    note = ""
+    if featured:
+        _low, high = percent_axis(displayed_percents(featured, briefing["paths"].get(featured["storage_id"], {})))
+        note = scale_note(high)
     body = (
-        _banner(briefing)
+        _banner(briefing, heading, lede)
+        + (_kpis(scenario_kpis(featured), "scenario-kpis") if featured else "")
         + '<section class="panel">'
-        + f'<h2 id="scenario-title">{esc(title)}</h2>'
+        + f'<h2 id="scenario-title">{esc(featured["place"] if featured else "Summer paths")}</h2>'
         + f'<div class="pills">{"".join(pills)}</div>'
         + f'<div id="scenario-chart">{chart}</div>'
         + '<p class="exact">Exact values: the lines are percent of accessible capacity. '
+        + '<span id="scenario-scale">'
+        + esc(note)
+        + "</span> "
         + "The shaded band is the likely range for the next 64 days, which runs past Christmas into late January. "
         + "Paths after that replay a whole summer’s average daily change. Volumes are not allowed to change the 40% line, which stays at two-fifths of capacity.</p>"
         + "</section>"
@@ -643,8 +876,18 @@ def _levers(briefing: dict) -> str:
         f"desalination plants supplied {(australia.get('desal_ml') or 0) / 1000:,.0f} billion litres "
         f"and recycled water supplied {(australia.get('reuse_supply_ml') or 0) / 1000:,.0f} billion litres."
     )
+    gaps = gap_states(briefing["levers"])
+    if gaps:
+        focus = max(gaps, key=lambda row: row.get("urban_gap_ml") or 0)
+        lede = (
+            f"The chart shows only states whose town supplies finish March under 40%. "
+            f"{focus['geography']} is the largest of those gaps."
+        )
+    else:
+        lede = "No tracked town supply finishes March under the 40% line on a dry summer."
     body = (
-        _banner(briefing)
+        _banner(briefing, lever_title(briefing["levers"]), lede)
+        + _kpis(lever_kpis(briefing["levers"]))
         + '<section class="panel"><h2>Town-supply gap to the end of March, and three ways to close it</h2>'
         + _lever_chart(briefing["levers"])
         + f"<p>{esc(national)}</p>"
@@ -654,6 +897,8 @@ def _levers(briefing: dict) -> str:
         + '<p class="exact">Exact values: 1 GL is a billion litres. Shares are how much of the town-supply gap that what-if would cover, capped at 100%. '
         + "The household cut is 15% of last year’s household use, scaled to the days left until 31 March 2027. "
         + "Desalination and recycled water are last year’s annual supply, scaled to the same days. "
+        + "The chart draws only states with a town-supply gap, and shortens Australian Capital Territory to ACT. "
+        + "The table lists every state, including those with no gap. "
         + "A dash means there is no town-supply gap on the dry path, so a share is not meaningful. "
         + "Farming storages are shown beside the town gap and are not something a city’s desalination plant can fill.</p>"
         + "</section>"

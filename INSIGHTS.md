@@ -7,9 +7,11 @@ These figures are computed from the committed public snapshot. They are not copi
 
 South Dandalup is the town supply already under the 40% line.
 
-South Dandalup (town supply, Western Australia) is at 9.1%. 8 tracked supplies are already under 40% full. Lake Menindee has read empty since 10 January 2026. Perth’s system is 38.5% full, 7.6 points down on last year.
+South Dandalup (town supply, Western Australia) is at 9.1%. 8 town, farm and regional supplies are already under 40% full. Lake Menindee, a farming supply rather than a town supply, has read empty since 10 January 2026. Perth’s system is 38.5% full, 7.6 points down on last year.
 
 Tracked supplies with a daily history: 63. Of the town, farming and regional supplies in that set, 8 are already under 40% of accessible capacity and 0 more would cross 40% before Christmas if they repeated their driest recent summer.
+
+Power-station lakes are not in that count. Also under 40%, but excluded: Great Lake (Tasmania) at 35.1%.
 
 ### Supplies already under 40%
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 from datetime import timedelta
 
 from temporalio import activity, workflow
@@ -17,11 +16,13 @@ from temporalio.worker import Worker
 
 
 @activity.defn
-def hold_open(seconds: int) -> str:
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
+async def hold_open(seconds: int) -> str:
+    remaining = int(seconds)
+    while remaining > 0:
         activity.heartbeat("holding")
-        time.sleep(5)
+        step = 5 if remaining > 5 else remaining
+        await asyncio.sleep(step)
+        remaining -= step
     return "done"
 
 

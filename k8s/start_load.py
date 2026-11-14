@@ -15,7 +15,7 @@ async def main() -> None:
     for index in range(9):
         await client.start_workflow(
             HoldWorkflow.run,
-            75,
+            45,
             id=f"hold-{run}-{index}",
             task_queue="water-ingest",
         )

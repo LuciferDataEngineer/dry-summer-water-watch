@@ -1,8 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "dry-summer-water-watch"
 version = "1.0.0"
 requires-python = ">=3.12"
 description = "Which Australian water supplies run short first this El Niño summer."
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

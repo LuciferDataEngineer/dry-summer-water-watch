@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -30,6 +31,7 @@ async def serve() -> None:
         task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "water-ingest"),
         workflows=[IngestAllWorkflow, StorageIngestWorkflow],
         activities=[write_storage_slice],
+        activity_executor=ThreadPoolExecutor(max_workers=int(os.environ.get("WATERWATCH_MAX_ACTIVITIES", "4"))),
         max_concurrent_activities=int(os.environ.get("WATERWATCH_MAX_ACTIVITIES", "4")),
     )
     await worker.run()

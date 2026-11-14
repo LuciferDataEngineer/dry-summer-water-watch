@@ -51,9 +51,11 @@ jobs:
         run: |
           pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt -r requirements-forecast.txt
+          pip install -e .
       - name: Recompute the likely range and compare the hold-out error
         run: python -m waterwatch.pipeline
         env:
+          PYTHONPATH: src
           WATERWATCH_CHECK_CHRONOS: "1"
           WATERWATCH_THREADS: "2"
           HF_HUB_ENABLE_HF_TRANSFER: "0"

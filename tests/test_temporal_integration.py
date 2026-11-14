@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,7 @@ def test_retry_then_idempotent_skip(temporal_server, tmp_path):
                 storage_ids,
                 id=f"retry-{uuid.uuid4().hex[:8]}",
                 task_queue="water-ingest",
+                execution_timeout=timedelta(seconds=45),
             )
 
         import asyncio
@@ -138,6 +140,7 @@ def test_resume_after_worker_crash(temporal_server, tmp_path):
             storage_ids,
             id=workflow_id,
             task_queue="water-ingest",
+            execution_timeout=timedelta(seconds=90),
         )
         return handle
 

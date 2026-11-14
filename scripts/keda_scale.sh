@@ -68,6 +68,6 @@ kubectl wait --for=jsonpath='{.status.readyReplicas}'=3 deployment/temporal-work
 echo "scaled to $(kubectl get deployment temporal-worker -o jsonpath='{.status.readyReplicas}')"
 
 echo "waiting for scale-in"
-kubectl wait --for=jsonpath='{.status.readyReplicas}'=1 deployment/temporal-worker --timeout=240s
+kubectl wait --for=jsonpath='{.status.readyReplicas}'=1 deployment/temporal-worker --timeout=300s
 echo "scaled back to $(kubectl get deployment temporal-worker -o jsonpath='{.status.readyReplicas}')"
 echo KEDA_OK

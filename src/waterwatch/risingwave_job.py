@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import time
+from datetime import date, datetime
 from pathlib import Path
 
 import duckdb
@@ -20,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOT = ROOT / "data" / "snapshot"
 OUTPUTS = ROOT / "outputs"
 
+# Calendar-day offset, not an interval cast. `date - integer` is a date in both
+# engines, so the 30-day and 90-day lookups land on the same day.
 DRAWDOWN_SQL = """
 SELECT
     a.storage_id,
@@ -38,19 +41,37 @@ SELECT
         WHEN a.volume_ml <= 0.40 * a.capacity_ml THEN 0
         WHEN b.volume_ml IS NULL THEN NULL
         WHEN (a.volume_ml - b.volume_ml) / 30.0 >= -1 THEN NULL
-        ELSE (a.volume_ml - 0.40 * a.capacity_ml) / (-(a.volume_ml - b.volume_ml) / 30.0)
+        ELSE ROUND(
+            CAST(
+                (a.volume_ml - 0.40 * a.capacity_ml)
+                / (-(a.volume_ml - b.volume_ml) / 30.0)
+            AS DOUBLE PRECISION),
+            6
+        )
     END AS days_to_low_on_30d_pace
 FROM storage_daily a
 LEFT JOIN storage_daily b
     ON a.storage_id = b.storage_id
-   AND b.obs_date = a.obs_date - INTERVAL '30 days'
+   AND b.obs_date = a.obs_date - 30
 LEFT JOIN storage_daily c
     ON a.storage_id = c.storage_id
-   AND c.obs_date = a.obs_date - INTERVAL '90 days'
+   AND c.obs_date = a.obs_date - 90
 """
 
+# Days may differ in the last bits of a double. A hundredth of a day is the
+# bound; status bands are compared exactly.
+DAY_TOLERANCE = 0.01
 
-def _sample_rows(limit_storages: int = 12) -> tuple[list[tuple], list[tuple], str]:
+
+def _as_date(value: object) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def _sample_rows(limit_storages: int = 12) -> tuple[list[tuple], list[tuple], date]:
     connection = duckdb.connect()
     ids = [
         row[0]
@@ -59,11 +80,14 @@ def _sample_rows(limit_storages: int = 12) -> tuple[list[tuple], list[tuple], st
             SELECT storage_id
             FROM read_parquet('{(SNAPSHOT / "daily.parquet").as_posix()}')
             GROUP BY 1
+            HAVING COUNT(DISTINCT CAST(obs_date AS DATE)) > 120
             ORDER BY COUNT(*) DESC, 1
             LIMIT {int(limit_storages)}
             """
         ).fetchall()
     ]
+    if not ids:
+        raise RuntimeError("snapshot has no storage with enough daily history to hold a day out")
     quoted = ", ".join("'" + storage_id.replace("'", "''") + "'" for storage_id in ids)
     frame = connection.execute(
         f"""
@@ -74,11 +98,23 @@ def _sample_rows(limit_storages: int = 12) -> tuple[list[tuple], list[tuple], st
         ORDER BY storage_id, obs_date
         """
     ).fetchall()
-    # Hold the last calendar day back so the incremental insert has something to add.
-    latest = max(row[1] for row in frame)
-    base = [row for row in frame if row[1] < latest]
-    extra = [row for row in frame if row[1] == latest]
-    return base, extra, str(latest)
+    normalised = [(_row[0], _as_date(_row[1]), float(_row[2]), float(_row[3])) for _row in frame]
+    # The hold-out day is the latest date shared by every selected storage, so
+    # the incremental insert is one row per storage and both engines see it.
+    by_storage: dict[str, set[date]] = {}
+    for storage_id, obs_date, _volume, _capacity in normalised:
+        by_storage.setdefault(storage_id, set()).add(obs_date)
+    shared = set.intersection(*by_storage.values()) if by_storage else set()
+    if not shared:
+        raise RuntimeError("snapshot did not yield a hold-out day shared by the selected storages")
+    latest = max(shared)
+    base = [row for row in normalised if row[1] < latest]
+    extra = [row for row in normalised if row[1] == latest]
+    if len(extra) != len(ids) or not base:
+        raise RuntimeError(
+            f"snapshot did not yield a hold-out day (storages={len(ids)}, holdout_rows={len(extra)}, earlier_rows={len(base)})"
+        )
+    return base, extra, latest
 
 
 def _docker_sample(container: str) -> tuple[float | None, float | None]:
@@ -127,7 +163,7 @@ def run_benchmark(dsn: str | None = None, container: str = "risingwave") -> dict
             )
         started = time.perf_counter()
         connection.execute(f"CREATE MATERIALIZED VIEW mv_drawdown AS {DRAWDOWN_SQL}")
-        _wait_for_rows(connection, len(base))
+        _wait_until_caught_up(connection, len(base), None, 0)
         create_seconds = time.perf_counter() - started
         cpu, memory = _docker_sample(container)
         started = time.perf_counter()
@@ -136,10 +172,15 @@ def run_benchmark(dsn: str | None = None, container: str = "risingwave") -> dict
                 "INSERT INTO storage_daily (storage_id, obs_date, volume_ml, capacity_ml) VALUES (%s, %s, %s, %s)",
                 extra,
             )
-        _wait_for_rows(connection, len(base) + len(extra))
+        _wait_until_caught_up(connection, len(base) + len(extra), latest, len(extra))
         incremental_seconds = time.perf_counter() - started
         streamed = connection.execute(
-            "SELECT storage_id, obs_date::text, days_to_low_on_30d_pace, status_band FROM mv_drawdown WHERE obs_date = %s",
+            """
+            SELECT storage_id, obs_date::text, days_to_low_on_30d_pace, status_band
+            FROM mv_drawdown
+            WHERE obs_date = %s
+            ORDER BY storage_id
+            """,
             (latest,),
         ).fetchall()
 
@@ -157,17 +198,16 @@ def run_benchmark(dsn: str | None = None, container: str = "risingwave") -> dict
     duck.executemany("INSERT INTO storage_daily VALUES (?, ?, ?, ?)", base + extra)
     started = time.perf_counter()
     batched = duck.execute(
-        DRAWDOWN_SQL.replace("INTERVAL '30 days'", "INTERVAL 30 DAY").replace("INTERVAL '90 days'", "INTERVAL 90 DAY")
-        + " WHERE a.obs_date = CAST(? AS DATE)",
+        DRAWDOWN_SQL + " WHERE a.obs_date = ? ORDER BY a.storage_id",
         [latest],
     ).fetchall()
     batch_seconds = time.perf_counter() - started
 
-    mismatches = _compare(streamed, batched)
+    mismatches, samples = _compare(streamed, batched)
     result = {
         "rows_loaded": len(base) + len(extra),
         "storages": len({row[0] for row in base}),
-        "holdout_day": latest,
+        "holdout_day": latest.isoformat(),
         "risingwave_materialize_seconds": round(create_seconds, 3),
         "risingwave_incremental_seconds": round(incremental_seconds, 3),
         "duckdb_full_recompute_seconds": round(batch_seconds, 3),
@@ -175,48 +215,86 @@ def run_benchmark(dsn: str | None = None, container: str = "risingwave") -> dict
         "risingwave_memory_mib": None if memory is None else round(memory, 1),
         "compared_rows": len(streamed),
         "mismatches": mismatches,
+        "mismatch_samples": samples,
     }
     OUTPUTS.mkdir(parents=True, exist_ok=True)
     (OUTPUTS / "benchmark.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     if mismatches:
-        raise AssertionError(f"streaming and batch results differ on {mismatches} rows")
+        raise AssertionError(f"streaming and batch results differ on {mismatches} rows: {samples}")
     return result
 
 
-def _wait_for_rows(connection, expected: int, timeout: float = 120) -> None:
+def _flush(connection) -> None:
+    connection.execute("FLUSH")
+
+
+def _wait_until_caught_up(connection, expected_rows: int, holdout: date | None, holdout_rows: int, timeout: float = 180) -> None:
+    """Block until the view has the source row count and, when asked, the hold-out day."""
+    _flush(connection)
     deadline = time.perf_counter() + timeout
+    stable = 0
+    previous: tuple[int, int] | None = None
     while time.perf_counter() < deadline:
-        count = connection.execute("SELECT COUNT(*) FROM mv_drawdown").fetchone()[0]
-        if count >= expected:
-            return
-        time.sleep(0.5)
-    raise TimeoutError(f"materialized view did not reach {expected} rows")
+        total = connection.execute("SELECT COUNT(*) FROM mv_drawdown").fetchone()[0]
+        if holdout is None:
+            found = 0
+        else:
+            found = connection.execute(
+                "SELECT COUNT(*) FROM mv_drawdown WHERE obs_date = %s",
+                (holdout,),
+            ).fetchone()[0]
+        signature = (int(total), int(found))
+        ready = signature[0] == expected_rows and (holdout is None or signature[1] == holdout_rows)
+        if ready and signature == previous:
+            stable += 1
+            if stable >= 2:
+                return
+        else:
+            stable = 1 if ready else 0
+        previous = signature
+        time.sleep(0.4)
+        _flush(connection)
+    raise TimeoutError(
+        f"materialized view did not settle at {expected_rows} rows"
+        + ("" if holdout is None else f" with {holdout_rows} on {holdout}")
+        + f"; last count was {previous}"
+    )
 
 
-def _compare(streamed, batched) -> int:
+def _compare(streamed, batched) -> tuple[int, list[str]]:
     def key(row):
         return (row[0], str(row[1])[:10])
 
     left = {key(row): row for row in streamed}
     right = {key(row): row for row in batched}
     mismatches = 0
-    for item, row in left.items():
+    samples: list[str] = []
+
+    def note(message: str) -> None:
+        if len(samples) < 5:
+            samples.append(message)
+
+    for item in sorted(set(left) | set(right)):
+        row = left.get(item)
         other = right.get(item)
-        if other is None:
+        if row is None or other is None:
             mismatches += 1
+            note(f"missing {item}: stream={row is not None} batch={other is not None}")
             continue
         if row[3] != other[3]:
             mismatches += 1
+            note(f"{item} status stream={row[3]} batch={other[3]}")
             continue
-        a, b = row[2], other[2]
-        if a is None or b is None:
-            if a is not None or b is not None:
+        stream_days, batch_days = row[2], other[2]
+        if stream_days is None or batch_days is None:
+            if stream_days is not None or batch_days is not None:
                 mismatches += 1
-        elif abs(float(a) - float(b)) > 0.05:
+                note(f"{item} days stream={stream_days} batch={batch_days}")
+            continue
+        if abs(float(stream_days) - float(batch_days)) > DAY_TOLERANCE:
             mismatches += 1
-    if len(left) != len(right):
-        mismatches += abs(len(left) - len(right))
-    return mismatches
+            note(f"{item} days stream={stream_days} batch={batch_days}")
+    return mismatches, samples
 
 
 def main() -> None:

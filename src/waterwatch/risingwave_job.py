@@ -171,7 +171,7 @@ def run_benchmark(dsn: str | None = None, container: str = "risingwave") -> dict
         incremental_seconds = time.perf_counter() - started
         streamed = connection.execute(
             """
-            SELECT storage_id, obs_date::text, days_to_low_on_30d_pace, status_band
+            SELECT storage_id, CAST(obs_date AS VARCHAR), days_to_low_on_30d_pace, status_band
             FROM mv_drawdown
             WHERE obs_date = %s
             ORDER BY storage_id
@@ -193,7 +193,12 @@ def run_benchmark(dsn: str | None = None, container: str = "risingwave") -> dict
     duck.executemany("INSERT INTO storage_daily VALUES (?, ?, ?, ?)", base + extra)
     started = time.perf_counter()
     batched = duck.execute(
-        DRAWDOWN_SQL + " WHERE a.obs_date = ? ORDER BY a.storage_id",
+        f"""
+        SELECT storage_id, CAST(obs_date AS VARCHAR), days_to_low_on_30d_pace, status_band
+        FROM ({DRAWDOWN_SQL.strip()}) q
+        WHERE obs_date = ?
+        ORDER BY storage_id
+        """,
         [latest],
     ).fetchall()
     batch_seconds = time.perf_counter() - started

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from waterwatch.briefing import decision_set, hydro_under_line
+
 
 def _n(value: float | None, digits: int = 0) -> str:
     if value is None:
@@ -21,7 +23,7 @@ def _pct(value: float | None) -> str:
 
 def write_insights(briefing: dict, path: Path) -> None:
     storages = briefing["storages"]
-    decision = [row for row in storages if row.get("role") != "hydro"] or storages
+    decision = decision_set(storages)
     under = [row for row in decision if row.get("already_under_line")]
     soon = [row for row in decision if row.get("dry_before_christmas") and not row.get("already_under_line")]
     chronos = briefing.get("chronos") or {}
@@ -42,6 +44,15 @@ def write_insights(briefing: dict, path: Path) -> None:
         f"Tracked supplies with a daily history: {len(storages)}. "
         f"Of the town, farming and regional supplies in that set, {len(under)} are already under 40% of accessible capacity "
         f"and {len(soon)} more would cross 40% before Christmas if they repeated their driest recent summer.",
+        "",
+    ]
+    excluded = hydro_under_line(storages)
+    if excluded:
+        bits = ", ".join(f"{row['place']} ({row['state']}) at {_pct(row.get('percent_full'))}" for row in excluded)
+        lines.append(
+            f"Power-station lakes are not in that count. Also under 40%, but excluded: {bits}."
+        )
+    lines += [
         "",
         "### Supplies already under 40%",
         "",
